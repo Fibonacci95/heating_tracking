@@ -4,20 +4,49 @@ import argparse
 from datetime import datetime
 from typing import Tuple, Dict
 
+def get_git_dir():
+    
+    current_dir = Path().cwd()
+    
+    while current_dir != current_dir.parent:
+        
+        if (current_dir / ".git").is_dir():
+            return str(current_dir)
+        else:
+            current_dir = current_dir.parent
+        
+    return None
+
 def setup_parser():
     parser = argparse.ArgumentParser(
         description="Take a logfile from a given path (heating times) and analze it"
     )
+    git_dir = get_git_dir()
+    
 
     parser.add_argument("-ip", "--input_path", 
                         required=True,
+                        default=f"{str(git_dir)}/evaluate/data",
                         type=str,
-                        help="Input path to the logfile to be analzed")
+                        help="Input path to the file to be analzed")
+    
+    parser.add_argument("-if", "--input_file", 
+                        required=True,
+                        default="brennerlaufzeiten.log",
+                        type=str,
+                        help="File to be analzed")
 
     parser.add_argument("-op", "--output_path", 
                         required=False,
+                        default=f"{str(git_dir)}/evaluate/result",
                         type=str,
-                        help="Output tpth to the logfile to be analzed")
+                        help="Output to the logfile to be analzed")
+    
+    parser.add_argument("-of", "--output_file", 
+                        required=False,
+                        default="summary.txt",
+                        type=str,
+                        help="Summary file")    
     
     logging.info(f"Setup argparser done")
     return parser
@@ -55,51 +84,60 @@ def seconds_to_readable_time(t_in_sec:int) -> Tuple[int,int,int]:
         hours = t_in_sec // seconds_per_hour
         minutes = (t_in_sec - (hours*seconds_per_hour)) // seconds_per_minute
         seconds = (t_in_sec - (hours*seconds_per_hour) - (minutes*60))
-        return hours, minutes, seconds  
+        return hours, minutes, seconds
+    
+def create_dictionary_entry():
+    logging.info("Creating new dictionary entry")
+
+    return {
+        "times": [],
+        "overall_time": 0
+    }
+    
+def get_file_path(user_path: str, user_file: str) -> Path:
+    
+    file_path = Path(user_path) / Path(user_file)
+    
+    if file_path.is_file():
+        return file_path
+    else:
+        return None
 
 def main():
     setup_logging()
     argparser = setup_parser().parse_args()
-    input_path = Path(argparser.input_path)
     
-    if not input_path.is_file():
-        logging.error(f"File path {input_path} does not exist!")
+    logging.info(f"Input path:  {argparser.input_path=}")
+    logging.info(f"Input file:  {argparser.input_file=}")
+    logging.info(f"Ouput path:  {argparser.output_path=}")
+    logging.info(f"Output file: {argparser.output_file=}")
+    
+    input_file_path: Path = get_file_path(argparser.input_path, argparser.input_file)
+    
+    if not input_file_path:
+        logging.error(f"Input file path does not exist!")
         return 0
     
-    # Explictitly write down the expected type of dictionary
-    brenner_dict : Dict[str, Dict[str, list | int]] = {}
+    from collections import defaultdict
+    brenner_dict = defaultdict(create_dictionary_entry)
     
-    with input_path.open("r") as f:
+    with Path(input_file_path).open("r") as f:
         
-        lines = f.readlines()
-        
-        for line in lines:
-            # Parse the current line into its information values
-            parsing_ok, infos = parse_line(line)
+        for line in f.readlines():
             
-            # Go to next iteration if parsing failed
-            if not parsing_ok:
-                continue
-
-            # Decompose Tuple
-            current_date, current_time, measured_time = infos
-            
-            # Add new entry to dict if it does not exist yet
-            if current_date not in brenner_dict:
-                brenner_dict[current_date] = {
-                    "times": [measured_time],
-                    "overall_time": int(measured_time)}
-                logging.info(f"Adding value {measured_time} to new element {current_date}")
-            else:
-                brenner_dict[current_date]["times"].append(measured_time)
-                brenner_dict[current_date]["overall_time"]+=int(measured_time)
-                logging.info(f"Adding value {measured_time} to already existing element {current_date}")
+            # Parse the current line into its information values            
+            match parse_line(line):
+                
+                case (False, ()):
+                    logging.info(f"Line \"{line}\" could not be parsed")
+                    continue
+                case (True, (date, time, measured_time)):
+                    entry = brenner_dict[date]
+                    entry["times"].append(time)
+                    entry["overall_time"]+= measured_time
+                    logging.info(f"For {date=}, add elements {time=} and {measured_time=} -- Sum: {entry["overall_time"]}")
     
-    
-    outfile = "summary.txt"
-    cwd = Path(__file__).parent
-    
-    with (cwd / Path(outfile)).open("w") as results:
+    with (Path(argparser.output_path) / Path(argparser.output_file)).open("w") as results:
     
         for key, item in brenner_dict.items():
             hours, minutes, seconds  = seconds_to_readable_time(item["overall_time"])
