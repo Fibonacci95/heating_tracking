@@ -3,26 +3,13 @@ import logging
 import argparse
 from datetime import datetime
 from typing import Tuple, Dict
-
-def get_git_dir():
-    
-    current_dir = Path().cwd()
-    
-    while current_dir != current_dir.parent:
-        
-        if (current_dir / ".git").is_dir():
-            return str(current_dir)
-        else:
-            current_dir = current_dir.parent
-        
-    return None
+from utils import get_git_dir, get_file_path, setup_logging
 
 def setup_parser():
     parser = argparse.ArgumentParser(
         description="Take a logfile from a given path (heating times) and analze it"
     )
     git_dir = get_git_dir()
-    
 
     parser.add_argument("-ip", "--input_path", 
                         required=True,
@@ -50,14 +37,6 @@ def setup_parser():
     
     logging.info(f"Setup argparser done")
     return parser
-
-def setup_logging():
-    logging.basicConfig(
-        filename="./log_analyzer.log",
-        filemode="a",
-        format='%(asctime)s %(levelname)-8s %(message)s',
-        level=logging.INFO,
-        datefmt='%Y-%m-%d %H:%M:%S')
     
 def parse_line(line: str) -> Tuple[bool, Tuple[str, str, int]]:
     if "INFO" not in line:
@@ -93,15 +72,6 @@ def create_dictionary_entry():
         "times": [],
         "overall_time": 0
     }
-    
-def get_file_path(user_path: str, user_file: str) -> Path:
-    
-    file_path = Path(user_path) / Path(user_file)
-    
-    if file_path.is_file():
-        return file_path
-    else:
-        return None
 
 def main():
     setup_logging()

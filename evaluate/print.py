@@ -1,9 +1,15 @@
 import re
 from datetime import datetime
 from pathlib import Path
-
+from typing import Optional, Callable
+import argparse
+from functools import partial
+import logging
+import yaml
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MultipleLocator
 from dataclasses import dataclass
+from utils import get_git_dir, setup_logging
 
 @dataclass
 class Brennerdaten:
@@ -16,33 +22,106 @@ class Brennerdaten:
 # Datei mit den Daten
 DATEI = "summary.txt"
 
-def get_min(min_date, current_date):
-    
-    if min_date is None:
-        return current_date
-    elif current_date < min_date:
-        return current_date
-    else:
-        return min_date
-    
-def get_max(max_date, current_date):
-    
-    if max_date is None:
-        return current_date
-    elif current_date > max_date:
-        return current_date
-    else:
-        return max_date
+@dataclass
+class Configuration:
+    weather_input: Path
+    data_input: Path
+    output: Path
 
-def parse_summary(DATEI):
+def get_yaml_config(config_path: str="config.yaml"):
+        
+    # Reading YAML data from file
+    with open(config_path, 'r') as f:
+        yaml_data = yaml.safe_load(f)
+        
+    return yaml_data
+
+def get_sanitized_config(yaml_data) -> Configuration:
+    paths = {}
+    
+    # Input paths to check
+    for key in ["weather_input", "data_input"]:
+        input_file_path = (Path(yaml_data[key]["dir"]) / Path(yaml_data[key]["file"])).resolve()
+        
+        if not input_file_path.is_file():
+            raise FileNotFoundError(f"File \"{input_file_path}\" does not exist")
+        
+        paths[key] = input_file_path
+        
+    # Output path to check
+    output_dir_path = Path(yaml_data["output"]["dir"]).resolve()
+    
+    if not output_dir_path.is_dir():
+        raise Exception(f"Ouput directory \"{output_dir_path}\" does not exist")
+
+    paths["output"] = output_dir_path / yaml_data["output"]["file"]
+    return Configuration(**paths)
+
+def setup_parser():
+    parser = argparse.ArgumentParser(
+        description="Take a logfile from a given path (heating times) and print it"
+    )
+    git_dir = get_git_dir()
+
+    parser.add_argument("-c", "--config_file_path", 
+                        required=False,
+                        default=f"{str(git_dir)}/config.yaml",
+                        type=str,
+                        help="Input path for the config file")
+    
+    return parser
+
+def get_config_file_path():
+    argparser = setup_parser().parse_args() 
+    yaml_config_path = Path(argparser.config_file_path)
+    
+    if not yaml_config_path.is_file():
+        raise FileNotFoundError(f"Configuration file \"{yaml_config_path}\" does not exist.")
+    return yaml_config_path
+
+
+Number = float | int
+
+def is_valid_instance(d: Optional[Number]):
+    """ Check if data is either of type 'float' or 'int' """
+    return isinstance(d, datetime)
+
+def get_best(compare_func : Callable[[Number, Number], Number],
+             best_date: Optional[Number], 
+             current_date: Optional[Number]):
+
+    # Check if current_date is 'None'
+    if current_date is None:
+        raise TypeError("Passed parameter is of type None")
+    
+    if not is_valid_instance(current_date):
+        raise TypeError("Passed parameter is of wrong type. Expect type datetime.")
+    
+    # Return the current_date if best_date is not yet initialized
+    if best_date is None:
+        return current_date
+    
+    if not is_valid_instance(best_date):
+        raise TypeError("Passed parameter is of wrong type. Expect datetime.")    
+    
+    # Finally, call the compare function
+    if not callable(compare_func):
+        raise TypeError("Function not callable")
+    
+    return compare_func(best_date, current_date)
+
+get_max = partial(get_best, max)
+get_min = partial(get_best, min)
+
+def parse_summary(input_file: Path):
     
     daten = []
     minutenwerte = []
     min_date = None
     max_date = None
-
+    
     # Datei einlesen
-    with open(DATEI, "r", encoding="utf-8") as f:
+    with input_file.open("r", encoding="utf-8") as f:
         for zeile in f:
         # Beispiel:
         # 31.05.2025: 0002 -> 00:00:02
@@ -99,7 +178,7 @@ def parse_wetterdaten(file_path: str, min_date, max_date):
 def plot_wetter_und_brenner(
     wetter: Wetterdaten,
     brenner: Brennerdaten,
-    outfile: str = "summary.png"
+    outfile: str|Path
 ):
     from datetime import datetime
     import matplotlib.pyplot as plt
@@ -151,6 +230,7 @@ def plot_wetter_und_brenner(
     ax2.set_ylabel("Laufzeit (Minuten)", color="black")
     ax2.set_xlabel("Datum", color="black")
     ax2.tick_params(axis="both", colors="black")
+    ax2.yaxis.set_major_locator(MultipleLocator(60))
     ax2.grid(True, color="lightgray")
     ax2.legend(loc="upper right")
 
@@ -163,14 +243,29 @@ def plot_wetter_und_brenner(
     fig.autofmt_xdate()
 
     plt.tight_layout()
-    # plt.show()
-    plt.savefig(Path(__file__).parent / outfile)
-  
-if __name__ == "__main__":
-    brenner: Brennerdaten = parse_summary(Path(__file__).parent / "summary.txt")
+    plt.savefig(outfile)
 
-    wetter: Wetterdaten = parse_wetterdaten(Path(__file__).parent / "wetterdaten.csv",
-                    brenner.min_date, 
+def main():
+    setup_logging()
+    
+    # Get the configuartion file from the argparser
+    config_file_path = get_config_file_path()
+    
+    # Read configuratino file and convert it into dataclass representation
+    config = get_yaml_config(config_file_path)
+    configuration = get_sanitized_config(config)
+    
+    # Evaluate brenner data set
+    brenner: Brennerdaten = parse_summary(configuration.data_input)
+
+    # Evaluate weather data set
+    wetter: Wetterdaten = parse_wetterdaten(configuration.weather_input,
+                    brenner.min_date,
                     brenner.max_date)
     
-    plot_wetter_und_brenner(wetter, brenner)
+    plot_wetter_und_brenner(wetter, 
+                            brenner, 
+                            configuration.output)
+
+if __name__ == "__main__":
+    main()

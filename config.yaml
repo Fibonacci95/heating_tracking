@@ -1,0 +1,11 @@
+weather_input:
+    dir: "./evaluate/data"
+    file: "wetterdaten.csv"
+
+data_input:
+    dir: "./evaluate/result"
+    file: "summary.txt"
+
+output:
+    dir: "./evaluate/result"
+    file: "summary.png"
